@@ -16,7 +16,8 @@ data Forme =
 
 data Solide =
     Sphere {rayon :: Float} |
-    Cylindre {rayon :: Float, longueur :: Float}
+    Cylindre {rayon :: Float, longueur :: Float} |
+    PlaqueInfinie
     deriving (Show)
 
 perimetre (Cercle rayon) = 2 * pi * rayon

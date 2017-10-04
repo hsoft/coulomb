@@ -7,18 +7,20 @@ densiteSurfacique solide charge = charge / (surface solide)
 chargeSelonDensiteLineique longueur densite = densite * longueur
 chargeSelonDensiteSurfacique solide densite = densite * (surface solide)
 
--- args: solide chargé, volume creux?, charge, surface de gauss
-champElectrique solide@(Sphere rs) True charge gauss@(Sphere rg)
+-- args: solide chargé, volume creux?, densité, surface de gauss
+champElectrique solide@(Sphere rs) True densite gauss@(Sphere rg)
     | rg < rs = 0
-    | otherwise = charge / (ε0 * (surface gauss))
+    | otherwise = (chargeSelonDensiteSurfacique solide densite) / (ε0 * (surface gauss))
+
+champElectrique PlaqueInfinie _ densite _ =
+    densite / (2 * ε0)  
 
 -- EXERCICES
 
 s3 gauss = 
     let s = Sphere 0.3
         d = 6 * 10 ** (-6)
-        c = chargeSelonDensiteSurfacique s d
-    in  champElectrique s True c gauss
+    in  champElectrique s True d gauss
 
 s3a = s3 (Sphere 0.1)
 s3b = s3 (Sphere 0.4)
@@ -34,3 +36,11 @@ s4 =
         densite = qin / lg
         charge = chargeSelonDensiteLineique lt densite
     in charge
+
+s5 =
+    let densite = 60 * 10 ** (-6) -- C / m2
+        distance = 0.07 -- m
+        r = 0.1 -- quelconque
+        gauss = Cylindre r distance
+    in champElectrique PlaqueInfinie False densite gauss
+
