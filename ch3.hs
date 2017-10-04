@@ -3,17 +3,28 @@ import Geo
 ε0 = 8.854 * 10 ** (-12)
 
 densiteSurfacique solide charge = charge / (surface solide)
+densiteVolumique solide charge = charge / (volume solide)
 
 chargeSelonDensiteLineique longueur densite = densite * longueur
 chargeSelonDensiteSurfacique solide densite = densite * (surface solide)
+chargeSelonDensiteVolumique solide densite = densite * (volume solide)
 
 -- args: solide chargé, volume creux?, densité, surface de gauss
 champElectrique solide@(Sphere rs) True densite gauss@(Sphere rg)
     | rg < rs = 0
     | otherwise = (chargeSelonDensiteSurfacique solide densite) / (ε0 * (surface gauss))
 
+champElectrique solide@(Sphere rs) False densite gauss@(Sphere rg)
+    | rg < rs = 0
+    | otherwise = (chargeSelonDensiteVolumique solide densite) / (ε0 * (surface gauss))
+
 champElectrique PlaqueInfinie _ densite _ =
     densite / (2 * ε0)  
+
+densiteSelonLeChamp solide@(Sphere rs) False champ gauss@(Sphere rg) =
+    let densite = qin / (volume gauss)
+        qin = champ * (surface gauss) * ε0
+    in densite
 
 -- EXERCICES
 
@@ -44,3 +55,20 @@ s5 =
         gauss = Cylindre r distance
     in champElectrique PlaqueInfinie False densite gauss
 
+e31data =
+    let rs = 0.1
+        solide = (Sphere rs)
+    in solide
+
+e31a =
+    let solide = e31data
+        champ = 2000 -- N/C
+        rChamp = 0.05
+        gauss = (Sphere rChamp)
+    in densiteSelonLeChamp solide False champ gauss
+
+e31b = 
+    let solide = e31data
+        densite = e31a
+        gauss = (Sphere 0.2)
+    in champElectrique solide False densite gauss
