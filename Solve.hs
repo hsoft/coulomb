@@ -44,22 +44,24 @@ data Expr =
     Const Float
     deriving (Eq)
 
+showBinOp fmt (BinOp op x y) = printf fmt (show x) (show op) (show y)
+
 instance Show Expr where
     show (Var x) = show x
     show (Const x) = show x
-    show (BinOp Equal x y) = printf "%s %s %s" (show x) (show Equal) (show y)
-    show (BinOp op x@(BinOp op1 _ _) y@(BinOp op2 _ _))
-        | (op1 == op) && (op2 == op) = printf "%s %s %s" (show x) (show op) (show y)
-        | op1 == op = printf "%s %s (%s)" (show x) (show op) (show y)
-        | op2 == op = printf "(%s) %s %s" (show x) (show op) (show y)
-        | otherwise = printf "(%s) %s (%s)" (show x) (show op) (show y)
-    show (BinOp op x@(BinOp op1 _ _) y)
-        | op1 == op = printf "%s %s %s" (show x) (show op) (show y)
-        | otherwise = printf "(%s) %s %s" (show x) (show op) (show y)
-    show (BinOp op x y@(BinOp op2 _ _))
-        | op2 == op = printf "%s %s %s" (show x) (show op) (show y)
-        | otherwise = printf "(%s) %s %s" (show x) (show op) (show y)
-    show (BinOp op x y) = printf "%s %s %s" (show x) (show op) (show y)
+    show all@(BinOp Equal _ _) = showBinOp "%s %s %s" all
+    show all@(BinOp op (BinOp op1 _ _) (BinOp op2 _ _))
+        | (op1 == op) && (op2 == op) = showBinOp "%s %s %s" all
+        | op1 == op = showBinOp "%s %s (%s)" all
+        | op2 == op = showBinOp "(%s) %s %s" all
+        | otherwise = showBinOp "(%s) %s (%s)" all
+    show all@(BinOp op (BinOp op1 _ _) _)
+        | op1 == op = showBinOp "%s %s %s" all
+        | otherwise = showBinOp "(%s) %s %s" all
+    show all@(BinOp op _ (BinOp op2 _ _))
+        | op2 == op = showBinOp "%s %s %s" all
+        | otherwise = showBinOp "(%s) %s %s" all
+    show all@(BinOp op _ _) = showBinOp "%s %s %s" all
 
 data MergeResult = Merged Expr | NotMerged
 
