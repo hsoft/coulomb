@@ -1,3 +1,4 @@
+import Text.Printf
 import Geo
 
 ε0 = 8.854 * 10 ** (-12)
@@ -72,3 +73,22 @@ e31b =
         densite = e31a
         gauss = (Sphere 0.2)
     in champElectrique solide False densite gauss
+
+-- tests
+
+assertEq a b
+    | a == b = ()
+    | otherwise = error (printf "%s != %s" a b)
+
+scifmt n exp = printf ("%0." ++ (show exp) ++ "e") n
+
+testPairs = [
+    (scifmt s3a 2, "0.00e0"),
+    (scifmt s3b 2, "3.81e5"),
+    (scifmt s3c 2, "6.78e5"),
+    (scifmt s4 2, "1.60e-5"),
+    (scifmt s5 2, "3.39e6"),
+    (scifmt e31a 2, "1.06e-6"),
+    (scifmt e31b 2, "1.00e3")]
+
+testAll = map (uncurry assertEq) testPairs
