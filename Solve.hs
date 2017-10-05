@@ -94,6 +94,49 @@ addTerm (TermI mx x) (TermF my y) = (TermF ((fromIntegral mx) + my) y)
 addTerm (TermF mx x) (TermF my y) = (TermF (mx + my) y)
 addTerm x y = addTerm y x
 
+exprDepth (BinOp _ x y) = (max (exprDepth x) (exprDepth y)) + 1
+exprDepth _ = 1
+
+-- areOpsEqual: Returns whether our children expressions are either Const, Var or of the same
+-- op as `opRef`
+areOpsEqual _ (Const _) = True
+areOpsEqual _ (Var _) = True
+areOpsEqual opRef (BinOp op x y)
+    | opRef == op = (areOpsEqual opRef x) && (areOpsEqual opRef y)
+    | otherwise = False
+
+applyBinOp _ (vx@(Var x):[])
+    | isTermNull x = c 0
+    | otherwise = vx
+applyBinOp op (vx@(Var x):xs)
+    | isTermNull x = expr
+    | otherwise = BinOp op expr vx
+    where expr = applyBinOp op xs
+
+sumConsts :: Expr -> Float
+sumConsts (Const x) = x
+sumConsts (BinOp _ x y) = sumConsts y + sumConsts x
+sumConsts _ = 0.0
+
+extractVars all@(Var _) = all:[]
+extractVars (BinOp _ x y) = extractVars y ++ extractVars x
+extractVars _ = []
+
+mergeVars :: [Expr] -> [Expr]
+mergeVars (x:[]) = [x]
+mergeVars all@(vx:vy:[])
+    | canMergeTerm x y = [(Var (addTerm x y))]
+    | otherwise = all
+    where ((Var x), (Var y)) = (vx, vy)
+
+mergeVars (vx:vy:xs)
+    | canMergeTerm x y = mergeVars ((Var (addTerm x y)):xs)
+    | otherwise =
+        let (newY:newXS1) = mergeVars (vy:xs)
+            (newX:newXS2) = mergeVars (vx:newXS1)
+        in  (newX:newY:newXS2)
+    where ((Var x), (Var y)) = (vx, vy)
+
 -- Normalize
 goesLeftOf (Var _) (Const _) = True
 goesLeftOf (BinOp _ _ _) (Const _) = True
@@ -103,10 +146,15 @@ goesLeftOf (BinOp Div _ _) (BinOp Add _ _) = True
 goesLeftOf (Var x) (Var y) = termIdent y > termIdent x
 goesLeftOf _ _ = False
 
-solveNormalizeSquashConst (BinOp Add (Const x) (Const y)) = Const (x+y)
-solveNormalizeSquashConst (BinOp Mult (Const x) (Const y)) = Const (x*y)
-solveNormalizeSquashConst (BinOp Div (Const x) (Const y)) = Const (x/y)
-solveNormalizeSquashConst x = x
+solveNormalizeSquash all@(BinOp Add x y)
+    | exprDepth all > 1 && areOpsEqual Add all =
+        let consts = sumConsts all
+            vars = mergeVars (extractVars all)
+            appliedVars = applyBinOp Add vars
+        in  if consts /= 0.0 then (BinOp Add appliedVars (c consts)) else appliedVars
+    | otherwise = all
+
+solveNormalizeSquash x = x
 
 solveNormalizeSendLeft (BinOp op x y)
     | goesLeftOf y x = solveNormalizeSendLeft (BinOp op y x)
@@ -120,34 +168,7 @@ solveNormalize (BinOp Equal x y) = (BinOp Equal (solveNormalize x) (solveNormali
 solveNormalize x
     | x == normalized = x
     | otherwise = solveNormalize normalized
-    where normalized = solveNormalizeSendLeft (solveNormalizeSquashConst x)
-
--- Reduce
-
-solveAddMerge tofind (Var x)
-    | canMergeTerm tofind x = Merged (var (addTerm tofind x))
-    | otherwise = NotMerged
-
-solveAddMerge tofind (BinOp Add x y) =
-    case solveAddMerge tofind x of
-        Merged newx -> Merged (BinOp Add newx y)
-        NotMerged ->
-            case solveAddMerge tofind y of
-                Merged newy -> Merged (BinOp Add x newy)
-                NotMerged -> NotMerged
-
-solveAddMerge x y = NotMerged
-
-solveReduceAdd all@(BinOp Add (Var x) (Var y))
-    | canMergeTerm x y = (var (addTerm x y))
-    | otherwise = all
-
-solveReduceAdd all@(BinOp Add addExpr@(BinOp Add _ _) (Var x)) =
-    case solveAddMerge x addExpr of
-        Merged newExpr -> solveReduceAdd newExpr
-        NotMerged -> all
-
-solveReduceAdd x = x
+    where normalized = solveNormalizeSendLeft (solveNormalizeSquash x)
 
 -- solveReduceEqual: We send all variables to the left and all consts to the right
 
@@ -166,7 +187,6 @@ solveReduce (BinOp Equal left@(Const lx) right@(Const rx))
     | lx == rx = equal left right
     | otherwise = error "impossible equality!"
 
-solveReduce (BinOp Add x y) = solveReduceAdd (BinOp Add (solveReduce x) (solveReduce y))
 solveReduce (BinOp Equal x y) = solveReduceEqual (solveReduce x) (solveReduce y)
 solveReduce (BinOp op x y) = BinOp op (solveReduce x) (solveReduce y)
 solveReduce x = x
