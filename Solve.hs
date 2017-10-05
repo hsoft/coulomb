@@ -20,9 +20,24 @@ instance Ord Term where
     TermF _ x < TermF _ y = x < y
     x <= y = (x == y) || (x < y)
 
+data BinaryOperator = Add | Mult
+
+instance Show BinaryOperator where
+    show Add = "+"
+    show Mult = "*"
+
+instance Eq BinaryOperator where
+    Add == Add = True
+    Mult == Mult = True
+    _ == _ = False
+
+instance Ord BinaryOperator where
+    Add < Mult = True
+    _ < _ = False
+    x <= y = (x == y) || (x < y)
+
 data Expr =
-    Mult Expr Expr |
-    Add Expr Expr |
+    BinOp BinaryOperator Expr Expr |
     Var Term |
     Const Float
     deriving (Eq)
@@ -30,28 +45,23 @@ data Expr =
 instance Show Expr where
     show (Var x) = show x
     show (Const x) = show x
-    show (Add x y) = printf "(%s + %s)" (show x) (show y)
-    show (Mult x y) = printf "(%s * %s)" (show x) (show y)
+    show (BinOp op x y) = printf "(%s %s %s)" (show x) (show op) (show y)
 
 instance Ord Expr where
     Const x < Const y = x < y
     Var x < Var y = x < y
-    Add x1 x2 < Add y1 y2 = (x1 <= y1) && (x2 < y2)
-    Mult x1 x2 < Mult y1 y2 = (x1 <= y1) && (x2 < y2)
+    BinOp xOp x1 x2 < BinOp yOp y1 y2 = (xOp <= yOp) && (x1 <= y1) && (x2 < y2)
 
     Const _ < Var _ = True
-    Const _ < Add _ _ = True
-    Const _ < Mult _ _ = True
+    Const _ < BinOp _ _ _ = True
 
-    Var _ < Add _ _ = True
-    Var _ < Mult _ _ = True
-
-    Add _ _ < Mult _ _ = True
+    Var _ < BinOp _ _ _ = True
 
     x <= y = (x == y) || (x < y)
 
 vs x = (Var (TermS x))
 vi mx x = (Var (TermI mx x))
+add x y = (BinOp Add x y)
 
 canMergeTerm (TermS x) (TermS y) = x == y
 canMergeTerm (TermS x) (TermI _ y) = x == y
@@ -61,27 +71,29 @@ canMergeTerm (TermI _ x) (TermF _ y) = x == y
 canMergeTerm (TermF _ x) (TermF _ y) = x == y
 canMergeTerm x y = canMergeTerm y x
 
-mergeTerm (TermS x) (TermS y) = (TermI 2 y)
-mergeTerm (TermS x) (TermI my y) = (TermI (my + 1) y)
-mergeTerm (TermS x) (TermF my y) = (TermF (my + 1) y)
-mergeTerm (TermI mx x) (TermI my y) = (TermI (mx + my) y)
-mergeTerm (TermI mx x) (TermF my y) = (TermF ((fromIntegral mx) + my) y)
-mergeTerm (TermF mx x) (TermF my y) = (TermF (mx + my) y)
-mergeTerm x y = mergeTerm y x
+addTerm (TermS x) (TermS y) = (TermI 2 y)
+addTerm (TermS x) (TermI my y) = (TermI (my + 1) y)
+addTerm (TermS x) (TermF my y) = (TermF (my + 1) y)
+addTerm (TermI mx x) (TermI my y) = (TermI (mx + my) y)
+addTerm (TermI mx x) (TermF my y) = (TermF ((fromIntegral mx) + my) y)
+addTerm (TermF mx x) (TermF my y) = (TermF (mx + my) y)
+addTerm x y = addTerm y x
 
 -- Norm1: normalize "horizontally"
-solveNorm1 (Add (Const x) (Const y)) = Const (x+y)
+solveNorm1 (BinOp Add (Const x) (Const y)) = Const (x+y)
+solveNorm1 (BinOp Mult (Const x) (Const y)) = Const (x*y)
 
-solveNorm1 (Add x y)
-    | y > x = solveNorm1 (Add y x)
-    | otherwise = (Add (solveNorm1 x) (solveNorm1 y))
+solveNorm1 (BinOp op x y)
+    | y > x = solveNorm1 (BinOp op y x)
+    | otherwise = (BinOp op (solveNorm1 x) (solveNorm1 y))
 
 solveNorm1 x = x
 
 -- Norm2: normalize "vertically"
 
-solveNorm2 all@(Add (Add inner1 inner2) outer)
-    | inner1 > outer = (Add (Add outer inner2) inner1)
+solveNorm2 all@(BinOp opOuter (BinOp opInner inner1 inner2) outer)
+    | (opInner == opOuter) && (inner1 > outer) =
+        (BinOp opOuter (BinOp opInner outer inner2) inner1)
     | otherwise = all
 
 solveNorm2 x = x
@@ -91,13 +103,13 @@ solveNormalize x
     | otherwise = solveNormalize normalized
     where normalized = solveNorm2 (solveNorm1 x)
 
-solveReduceAdd all@(Add (Var x) (Var y))
-    | canMergeTerm x y = (Var (mergeTerm x y))
+solveReduceAdd all@(BinOp Add (Var x) (Var y))
+    | canMergeTerm x y = (Var (addTerm x y))
     | otherwise = all
 
 solveReduceAdd x = x
 
-solveReduce (Add x y) = solveReduceAdd (Add (solveReduce x) (solveReduce y))
+solveReduce (BinOp Add x y) = solveReduceAdd (BinOp Add (solveReduce x) (solveReduce y))
 solveReduce x = x
 
 solve x = solveReduce (solveNormalize x)
@@ -109,6 +121,6 @@ assertEq a b
     | otherwise = error (printf "%s != %s" a b)
 
 testPairs = [
-    ((show (solve (Add (Add (vs "x") (vs "y")) (vs "x")))), "(2x + y)")]
+    ((show (solve (add (add (vs "x") (vs "y")) (vs "x")))), "(2x + y)")]
 
 testAll = map (uncurry assertEq) testPairs
