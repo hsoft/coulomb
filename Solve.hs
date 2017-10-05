@@ -70,6 +70,7 @@ var t = if isTermNull t then c 0 else (Var t)
 vs x = (var (TermS x))
 vi mx x = (var (TermI mx x))
 add x y = (BinOp Add x y)
+mult x y = (BinOp Mult x y)
 equal x y = (BinOp Equal x y)
 
 negateTerm (TermS x) = (TermI (-1) x)
@@ -135,19 +136,21 @@ solveAddMerge tofind (Var x)
     | canMergeTerm tofind x = Merged (var (addTerm tofind x))
     | otherwise = NotMerged
 
-solveAddMerge tofind (BinOp Add x y) =
-    case solveAddMerge tofind x of
-        Merged newx -> Merged (BinOp Add newx y)
-        NotMerged ->
-            case solveAddMerge tofind y of
-                Merged newy -> Merged (BinOp Add x newy)
-                NotMerged -> NotMerged
+solveAddMerge tofind (BinOp op x y)
+    | op == Add || op == Mult =
+        case solveAddMerge tofind x of
+            Merged newx -> Merged (BinOp op newx y)
+            NotMerged ->
+                case solveAddMerge tofind y of
+                    Merged newy -> Merged (BinOp op x newy)
+                    NotMerged -> NotMerged
+    | otherwise = NotMerged
 
 solveReduceAdd all@(BinOp Add (Var x) (Var y))
     | canMergeTerm x y = (var (addTerm x y))
     | otherwise = all
 
-solveReduceAdd all@(BinOp Add addExpr@(BinOp Add _ _) (Var x)) =
+solveReduceAdd all@(BinOp Add addExpr@(BinOp _ _ _) (Var x)) =
     case solveAddMerge x addExpr of
         Merged newExpr -> solveReduceAdd newExpr
         NotMerged -> all
@@ -189,7 +192,8 @@ assertEq a b
     | otherwise = error (printf "%s != %s" a b)
 
 testPairs = [
-    ((show (solve (add (add (vs "x") (vs "y")) (vs "x")))), "2x + y"),
-    ((show (solve (equal (vs "x") (vi 2 "y")))), "x + -2y = 0.0")]
+    (add (add (vs "x") (vs "y")) (vs "x"), "2x + y"),
+    (add (vs "x") (mult (vs "x") (vs "y")), "2x * y"),
+    (equal (vs "x") (vi 2 "y"), "x + -2y = 0.0")]
 
-testAll = map (uncurry assertEq) testPairs
+testAll = [assertEq (show (solve expr)) expected | (expr, expected) <- testPairs]
