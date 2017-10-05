@@ -18,25 +18,13 @@ instance Ord Term where
     x < y = termMult x < termMult y
     x <= y = (termMult x == termMult y) || (termMult x < termMult y)
 
-data BinaryOperator = Add | Mult | Equal
+data BinaryOperator = Add | Mult | Div | Equal deriving (Eq)
 
 instance Show BinaryOperator where
     show Add = "+"
     show Mult = "*"
+    show Div = "/"
     show Equal = "="
-
-instance Eq BinaryOperator where
-    Add == Add = True
-    Mult == Mult = True
-    Equal == Equal = True
-    _ == _ = False
-
-instance Ord BinaryOperator where
-    Add < Mult = True
-    Add < Equal = True
-    Mult < Equal = True
-    _ < _ = False
-    x <= y = (x == y) || (x < y)
 
 data Expr =
     BinOp BinaryOperator Expr Expr |
@@ -71,6 +59,7 @@ vs x = (var (TermS x))
 vi mx x = (var (TermI mx x))
 add x y = (BinOp Add x y)
 mult x y = (BinOp Mult x y)
+div_ x y = (BinOp Div x y)
 equal x y = (BinOp Equal x y)
 
 negateTerm (TermS x) = (TermI (-1) x)
@@ -110,11 +99,14 @@ goesLeftOf (Var _) (Const _) = True
 goesLeftOf (BinOp _ _ _) (Const _) = True
 goesLeftOf (BinOp _ _ _) (Var _) = True
 goesLeftOf (BinOp Mult _ _) (BinOp Add _ _) = True
+goesLeftOf (BinOp Div _ _) (BinOp Add _ _) = True
 goesLeftOf (Var x) (Var y) = termIdent y > termIdent x
 goesLeftOf _ _ = False
 
-solveNormalizeSendLeft (BinOp Add (Const x) (Const y)) = Const (x+y)
-solveNormalizeSendLeft (BinOp Mult (Const x) (Const y)) = Const (x*y)
+solveNormalizeSquashConst (BinOp Add (Const x) (Const y)) = Const (x+y)
+solveNormalizeSquashConst (BinOp Mult (Const x) (Const y)) = Const (x*y)
+solveNormalizeSquashConst (BinOp Div (Const x) (Const y)) = Const (x/y)
+solveNormalizeSquashConst x = x
 
 solveNormalizeSendLeft (BinOp op x y)
     | goesLeftOf y x = solveNormalizeSendLeft (BinOp op y x)
@@ -128,7 +120,7 @@ solveNormalize (BinOp Equal x y) = (BinOp Equal (solveNormalize x) (solveNormali
 solveNormalize x
     | x == normalized = x
     | otherwise = solveNormalize normalized
-    where normalized = solveNormalizeSendLeft x
+    where normalized = solveNormalizeSendLeft (solveNormalizeSquashConst x)
 
 -- Reduce
 
@@ -136,21 +128,21 @@ solveAddMerge tofind (Var x)
     | canMergeTerm tofind x = Merged (var (addTerm tofind x))
     | otherwise = NotMerged
 
-solveAddMerge tofind (BinOp op x y)
-    | op == Add || op == Mult =
-        case solveAddMerge tofind x of
-            Merged newx -> Merged (BinOp op newx y)
-            NotMerged ->
-                case solveAddMerge tofind y of
-                    Merged newy -> Merged (BinOp op x newy)
-                    NotMerged -> NotMerged
-    | otherwise = NotMerged
+solveAddMerge tofind (BinOp Add x y) =
+    case solveAddMerge tofind x of
+        Merged newx -> Merged (BinOp Add newx y)
+        NotMerged ->
+            case solveAddMerge tofind y of
+                Merged newy -> Merged (BinOp Add x newy)
+                NotMerged -> NotMerged
+
+solveAddMerge x y = NotMerged
 
 solveReduceAdd all@(BinOp Add (Var x) (Var y))
     | canMergeTerm x y = (var (addTerm x y))
     | otherwise = all
 
-solveReduceAdd all@(BinOp Add addExpr@(BinOp _ _ _) (Var x)) =
+solveReduceAdd all@(BinOp Add addExpr@(BinOp Add _ _) (Var x)) =
     case solveAddMerge x addExpr of
         Merged newExpr -> solveReduceAdd newExpr
         NotMerged -> all
@@ -193,7 +185,8 @@ assertEq a b
 
 testPairs = [
     (add (add (vs "x") (vs "y")) (vs "x"), "2x + y"),
-    (add (vs "x") (mult (vs "x") (vs "y")), "2x * y"),
+    (add (vs "x") (mult (vs "x") (vs "y")), "(x * y) + x"),
+    (add (vs "x") (div_ (vs "x") (vs "y")), "(x / y) + x"),
     (equal (vs "x") (vi 2 "y"), "x + -2y = 0.0")]
 
 testAll = [assertEq (show (solve expr)) expected | (expr, expected) <- testPairs]
