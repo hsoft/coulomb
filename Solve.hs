@@ -1,19 +1,17 @@
 import Text.Printf
 
-data Term = TermI Int String | TermF Float String
+data Term = Term Double String
 
 instance Show Term where
-    show (TermI mult id) = if mult == 1 then id else printf "%d%s" mult id
-    show (TermF mult id) = printf "%0.2e%s" mult id
+    show (Term mult id)
+        | isint && isone = id
+        | isint = printf "%0.0f%s" mult id
+        | otherwise = printf "%0.2e%s" mult id
+        where isint = isInt mult 3
+              isone = isint && (round mult) == 1
 
 instance Eq Term where
-    TermI mx x == TermI my y = (x == y) && (mx == my)
-    TermF mx x == TermF my y = (x == y) && (mx == my)
-    _ == _ = False
-
-instance Ord Term where
-    x < y = termMult x < termMult y
-    x <= y = (termMult x == termMult y) || (termMult x < termMult y)
+    Term mx x == Term my y = (x == y) && (mx == my)
 
 data BinaryOperator = Add | Mult | Div | Equal deriving (Eq)
 
@@ -26,7 +24,7 @@ instance Show BinaryOperator where
 data Expr =
     BinOp BinaryOperator Expr Expr |
     Var Term |
-    Const Float
+    Const Double
     deriving (Eq)
 
 showBinOp fmt (BinOp op x y) = printf fmt (show x) (show op) (show y)
@@ -53,30 +51,26 @@ data MergeResult = Merged Expr | NotMerged
 c x = (Const x)
 var t = if isTermNull t then c 0 else (Var t)
 vs x = vi 1 x
-vi mx x = (var (TermI mx x))
+vi mx x = (var (Term mx x))
 add x y = (BinOp Add x y)
 mult x y = (BinOp Mult x y)
 div_ x y = (BinOp Div x y)
 equal x y = (BinOp Equal x y)
 
-negateTerm (TermI mx x) = (TermI (-mx) x)
-negateTerm (TermF mx x) = (TermF (-mx) x)
+-- https://stackoverflow.com/a/12868743
+-- Returns if x is an int to n decimal places
+isInt :: (Integral a, RealFrac b) => b -> a -> Bool
+isInt x n = (round $ 10^(fromIntegral n)*(x-(fromIntegral $ round x)))==0
+
+negateTerm (Term mx x) = (Term (-mx) x)
 
 canMergeTerm x y = termIdent x == termIdent y
 
-termIdent (TermI _ x) = x
-termIdent (TermF _ x) = x
+termIdent (Term _ x) = x
 
-termMult (TermI m _) = fromIntegral m
-termMult (TermF m _) = m
+isTermNull (Term m _) = m <= 0.001 && m >= -0.001
 
-isTermNull (TermI m _) = m == 0
-isTermNull (TermF m _) = m == 0.0
-
-addTerm (TermI mx x) (TermI my y) = (TermI (mx + my) y)
-addTerm (TermI mx x) (TermF my y) = (TermF ((fromIntegral mx) + my) y)
-addTerm (TermF mx x) (TermF my y) = (TermF (mx + my) y)
-addTerm x y = addTerm y x
+addTerm (Term mx x) (Term my y) = (Term (mx + my) y)
 
 exprDepth (BinOp _ x y) = (max (exprDepth x) (exprDepth y)) + 1
 exprDepth _ = 1
@@ -97,7 +91,7 @@ applyBinOp op (vx@(Var x):xs)
     | otherwise = BinOp op expr vx
     where expr = applyBinOp op xs
 
-sumConsts :: Expr -> Float
+sumConsts :: Expr -> Double
 sumConsts (Const x) = x
 sumConsts (BinOp _ x y) = sumConsts y + sumConsts x
 sumConsts _ = 0.0
