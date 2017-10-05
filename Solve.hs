@@ -1,17 +1,17 @@
 import Text.Printf
 
-data Term = Term Double String
+data Term = Term Double Int String deriving (Eq)
 
 instance Show Term where
-    show (Term mult id)
-        | isint && isone = id
-        | isint = printf "%0.0f%s" mult id
-        | otherwise = printf "%0.2e%s" mult id
-        where isint = isInt mult 3
-              isone = isint && (round mult) == 1
-
-instance Eq Term where
-    Term mx x == Term my y = (x == y) && (mx == my)
+    show (Term mult exp id) =
+        let isint = isInt mult 3
+            isone = isint && (round mult) == 1
+            prefix = case (isint, isone) of
+                (True, True) -> ""
+                (True, False) -> printf "%0.0f" mult
+                (False, False) -> printf "%0.2e" mult
+            suffix = if exp > 1 then "^" ++ (show exp) else ""
+        in prefix ++ id ++ suffix
 
 data BinaryOperator = Add | Mult | Div | Equal deriving (Eq)
 
@@ -51,7 +51,7 @@ data MergeResult = Merged Expr | NotMerged
 c x = (Const x)
 var t = if isTermNull t then c 0 else (Var t)
 vs x = vi 1 x
-vi mx x = (var (Term mx x))
+vi mx x = (var (Term mx 1 x))
 add x y = (BinOp Add x y)
 mult x y = (BinOp Mult x y)
 div_ x y = (BinOp Div x y)
@@ -62,15 +62,19 @@ equal x y = (BinOp Equal x y)
 isInt :: (Integral a, RealFrac b) => b -> a -> Bool
 isInt x n = (round $ 10^(fromIntegral n)*(x-(fromIntegral $ round x)))==0
 
-negateTerm (Term mx x) = (Term (-mx) x)
+negateTerm (Term mx exp x) = (Term (-mx) exp x)
 
-canMergeTerm x y = termIdent x == termIdent y
+canMergeTerm (Term _ expx x) (Term _ expy y) = x == y && expx == expy
 
-termIdent (Term _ x) = x
+isTermNull (Term m _ _) = m <= 0.001 && m >= -0.001
 
-isTermNull (Term m _) = m <= 0.001 && m >= -0.001
+addTerm (Term mx expx x) (Term my expy y)
+    | x == y && expx == expy = (Term (mx + my) expy y)
+    | otherwise = error "Can't merge term!"
 
-addTerm (Term mx x) (Term my y) = (Term (mx + my) y)
+multTerm (Term mx expx x) (Term my expy y)
+    | x == y = (Term (mx * my) (expx + expy) y)
+    | otherwise = error "Can't merge term!"
 
 exprDepth (BinOp _ x y) = (max (exprDepth x) (exprDepth y)) + 1
 exprDepth _ = 1
@@ -100,18 +104,18 @@ extractVars all@(Var _) = all:[]
 extractVars (BinOp _ x y) = extractVars y ++ extractVars x
 extractVars _ = []
 
-mergeVars :: [Expr] -> [Expr]
-mergeVars (x:[]) = [x]
-mergeVars all@(vx:vy:[])
-    | canMergeTerm x y = [(Var (addTerm x y))]
+mergeVars :: (Term -> Term -> Term) -> [Expr] -> [Expr]
+mergeVars _ (x:[]) = [x]
+mergeVars mergeFunc all@(vx:vy:[])
+    | canMergeTerm x y = [(Var (mergeFunc x y))]
     | otherwise = all
     where ((Var x), (Var y)) = (vx, vy)
 
-mergeVars (vx:vy:xs)
-    | canMergeTerm x y = mergeVars ((Var (addTerm x y)):xs)
+mergeVars mergeFunc (vx:vy:xs)
+    | canMergeTerm x y = mergeVars mergeFunc ((Var (mergeFunc x y)):xs)
     | otherwise =
-        let (newY:newXS1) = mergeVars (vy:xs)
-            (newX:newXS2) = mergeVars (vx:newXS1)
+        let (newY:newXS1) = mergeVars mergeFunc (vy:xs)
+            (newX:newXS2) = mergeVars mergeFunc (vx:newXS1)
         in  (newX:newY:newXS2)
     where ((Var x), (Var y)) = (vx, vy)
 
@@ -121,15 +125,18 @@ goesLeftOf (BinOp _ _ _) (Const _) = True
 goesLeftOf (BinOp _ _ _) (Var _) = True
 goesLeftOf (BinOp Mult _ _) (BinOp Add _ _) = True
 goesLeftOf (BinOp Div _ _) (BinOp Add _ _) = True
-goesLeftOf (Var x) (Var y) = termIdent y > termIdent x
+goesLeftOf (Var (Term _ _ x)) (Var (Term _ _ y)) = y > x
 goesLeftOf _ _ = False
 
-solveNormalizeSquash all@(BinOp Add x y)
-    | exprDepth all > 1 && areOpsEqual Add all =
+solveNormalizeSquash all@(BinOp op x y)
+    | (op == Add || op == Mult) && exprDepth all > 1 && areOpsEqual op all =
         let consts = sumConsts all
-            vars = mergeVars (extractVars all)
-            appliedVars = applyBinOp Add vars
-        in  if consts /= 0.0 then (BinOp Add appliedVars (c consts)) else appliedVars
+            mergeFunc = case op of
+                Add -> addTerm
+                Mult -> multTerm
+            vars = mergeVars mergeFunc (extractVars all)
+            appliedVars = applyBinOp op vars
+        in  if consts /= 0.0 then (BinOp op appliedVars (c consts)) else appliedVars
     | otherwise = all
 
 solveNormalizeSquash x = x
@@ -184,6 +191,7 @@ assertEq a b
 testPairs = [
     (add (add (vs "x") (vs "y")) (vs "x"), "2x + y"),
     (add (vs "x") (mult (vs "x") (vs "y")), "(x * y) + x"),
+    (mult (vs "x") (vs "x"), "x^2"),
     (add (vs "x") (div_ (vs "x") (vs "y")), "(x / y) + x"),
     (equal (vs "x") (vi 2 "y"), "x + -2y = 0.0")]
 
