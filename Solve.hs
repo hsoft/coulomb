@@ -10,7 +10,7 @@ instance Show Term where
                 (True, True) -> ""
                 (True, False) -> printf "%0.0f" mult
                 (False, False) -> printf "%0.2e" mult
-            suffix = if exp > 1 then "^" ++ (show exp) else ""
+            suffix = if exp /= 1 then "^" ++ (show exp) else ""
         in prefix ++ id ++ suffix
 
 data BinaryOperator = Add | Mult | Div | Equal deriving (Eq)
@@ -46,10 +46,8 @@ instance Show Expr where
         | otherwise = showBinOp "(%s) %s %s" all
     show all@(BinOp op _ _) = showBinOp "%s %s %s" all
 
-data MergeResult = Merged Expr | NotMerged
-
 c x = (Const x)
-var t = if isTermNull t then c 0 else (Var t)
+var t = if isTermZero t then c 0 else (Var t)
 vs x = vi 1 x
 vi mx x = (var (Term mx 1 x))
 add x y = (BinOp Add x y)
@@ -63,21 +61,17 @@ isInt :: (Integral a, RealFrac b) => b -> a -> Bool
 isInt x n = (round $ 10^(fromIntegral n)*(x-(fromIntegral $ round x)))==0
 
 negateTerm (Term mx exp x) = (Term (-mx) exp x)
+invertTerm (Term mx exp x) = (Term mx (-exp) x)
 
-canMergeTerm (Term _ expx x) (Term _ expy y) = x == y && expx == expy
-
-isTermNull (Term m _ _) = m <= 0.001 && m >= -0.001
+isTermZero (Term m _ _) = m <= 0.001 && m >= -0.001
 
 addTerm (Term mx expx x) (Term my expy y)
-    | x == y && expx == expy = (Term (mx + my) expy y)
-    | otherwise = error "Can't merge term!"
+    | x == y && expx == expy = (Just (Term (mx + my) expy y))
+    | otherwise = Nothing
 
 multTerm (Term mx expx x) (Term my expy y)
-    | x == y = (Term (mx * my) (expx + expy) y)
-    | otherwise = error "Can't merge term!"
-
-exprDepth (BinOp _ x y) = (max (exprDepth x) (exprDepth y)) + 1
-exprDepth _ = 1
+    | x == y = (Just (Term (mx * my) (expx + expy) y))
+    | otherwise = Nothing
 
 -- areOpsEqual: Returns whether our children expressions are either Const, Var or of the same
 -- op as `opRef`
@@ -87,37 +81,34 @@ areOpsEqual opRef (BinOp op x y)
     | opRef == op = (areOpsEqual opRef x) && (areOpsEqual opRef y)
     | otherwise = False
 
-applyBinOp _ (vx@(Var x):[])
-    | isTermNull x = c 0
-    | otherwise = vx
-applyBinOp op (vx@(Var x):xs)
-    | isTermNull x = expr
-    | otherwise = BinOp op expr vx
-    where expr = applyBinOp op xs
+applyBinOp _ (x:[]) = (Var x)
+applyBinOp op (x:xs) = BinOp op (applyBinOp op xs) (Var x)
 
-sumConsts :: Expr -> Double
-sumConsts (Const x) = x
-sumConsts (BinOp _ x y) = sumConsts y + sumConsts x
-sumConsts _ = 0.0
+extractConsts :: Expr -> [Double]
+extractConsts (Const x) = [x]
+extractConsts (BinOp _ x y) = extractConsts y ++ extractConsts x
+extractConsts _ = []
 
 extractVars all@(Var _) = all:[]
 extractVars (BinOp _ x y) = extractVars y ++ extractVars x
 extractVars _ = []
 
-mergeVars :: (Term -> Term -> Term) -> [Expr] -> [Expr]
+mergeVars :: (Term -> Term -> Maybe Term) -> [Expr] -> [Expr]
 mergeVars _ (x:[]) = [x]
-mergeVars mergeFunc all@(vx:vy:[])
-    | canMergeTerm x y = [(Var (mergeFunc x y))]
-    | otherwise = all
-    where ((Var x), (Var y)) = (vx, vy)
+mergeVars mergeFunc all@(vx@(Var x):vy@(Var y):[]) = case mergeFunc x y of
+    Just merged -> [(Var merged)]
+    Nothing -> all
 
-mergeVars mergeFunc (vx:vy:xs)
-    | canMergeTerm x y = mergeVars mergeFunc ((Var (mergeFunc x y)):xs)
-    | otherwise =
+mergeVars mergeFunc (vx@(Var x):vy@(Var y):xs) = case mergeFunc x y of
+    Just merged -> mergeVars mergeFunc ((Var merged):xs)
+    Nothing ->
         let (newY:newXS1) = mergeVars mergeFunc (vy:xs)
             (newX:newXS2) = mergeVars mergeFunc (vx:newXS1)
         in  (newX:newY:newXS2)
-    where ((Var x), (Var y)) = (vx, vy)
+
+invertExpr (Const val) = (c (val ** (-1)))
+invertExpr (Var term) = (var (invertTerm term))
+invertExpr (BinOp op x y) = (BinOp op (invertExpr x) (invertExpr y))
 
 -- Normalize
 goesLeftOf (Var _) (Const _) = True
@@ -128,16 +119,40 @@ goesLeftOf (BinOp Div _ _) (BinOp Add _ _) = True
 goesLeftOf (Var (Term _ _ x)) (Var (Term _ _ y)) = y > x
 goesLeftOf _ _ = False
 
-solveNormalizeSquash all@(BinOp op x y)
-    | (op == Add || op == Mult) && exprDepth all > 1 && areOpsEqual op all =
-        let consts = sumConsts all
-            mergeFunc = case op of
-                Add -> addTerm
-                Mult -> multTerm
-            vars = mergeVars mergeFunc (extractVars all)
-            appliedVars = applyBinOp op vars
-        in  if consts /= 0.0 then (BinOp op appliedVars (c consts)) else appliedVars
+solveNormalizeSquash all@(BinOp Add x y)
+    | areOpsEqual Add all =
+        let consts = extractConsts all
+            constsVal = sum consts
+            constsValIsNeutral = constsVal == 0
+            vars = mergeVars addTerm (extractVars all)
+            terms = [t | (Var t) <- vars]
+            filteredTerms = filter (\x -> not (isTermZero x)) terms
+            appliedVars = applyBinOp Add terms
+        in  case constsValIsNeutral of
+            True -> appliedVars
+            False -> (add appliedVars (c (sum consts)))
     | otherwise = all
+
+solveNormalizeSquash all@(BinOp Mult x y)
+    | areOpsEqual Mult all =
+        let consts = extractConsts all
+            constsVal = foldl (*) 1 consts
+            constsValIsNeutral = constsVal == 1
+            vars = mergeVars multTerm (extractVars all)
+            terms = [t | (Var t) <- vars]
+            exprNullified = constsVal == 0 || (not (null (filter isTermZero terms)))
+            appliedVars = applyBinOp Mult terms
+        in  case (exprNullified, constsValIsNeutral) of
+            (True, _) -> c 0
+            (False, True) -> appliedVars
+            (False, False) -> (BinOp Mult appliedVars (c (sum consts)))
+    | otherwise = all
+
+-- We normalize division by transforming it into a multiplication of negative exponents
+solveNormalizeSquash all@(BinOp Div left right) = solveNormalize (BinOp Mult left (invertExpr right))
+
+-- We want to squash single 0-mult terms with minimal code duplication
+solveNormalizeSquash all@(Var _) = solveNormalizeSquash (mult all (c 1))
 
 solveNormalizeSquash x = x
 
@@ -192,6 +207,8 @@ testPairs = [
     (add (add (vs "x") (vs "y")) (vs "x"), "2x + y"),
     (add (vs "x") (mult (vs "x") (vs "y")), "(x * y) + x"),
     (mult (vs "x") (vs "x"), "x^2"),
+    (mult (vs "x") (c 0), "0.0"),
+    (div_ (mult (vs "x") (vs "x")) (vs "x"), "x"),
     (add (vs "x") (div_ (vs "x") (vs "y")), "(x / y) + x"),
     (equal (vs "x") (vi 2 "y"), "x + -2y = 0.0")]
 
