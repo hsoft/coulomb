@@ -49,7 +49,7 @@ instance Show Expr where
 data MergeResult = Merged Expr | NotMerged
 
 c x = (Const x)
-var t = if isTermNull t then c 0 else (Var t)
+var t = if isTermZero t then c 0 else (Var t)
 vs x = vi 1 x
 vi mx x = (var (Term mx 1 x))
 add x y = (BinOp Add x y)
@@ -66,7 +66,7 @@ negateTerm (Term mx exp x) = (Term (-mx) exp x)
 
 canMergeTerm (Term _ expx x) (Term _ expy y) = x == y && expx == expy
 
-isTermNull (Term m _ _) = m <= 0.001 && m >= -0.001
+isTermZero (Term m _ _) = m <= 0.001 && m >= -0.001
 
 addTerm (Term mx expx x) (Term my expy y)
     | x == y && expx == expy = (Term (mx + my) expy y)
@@ -87,18 +87,13 @@ areOpsEqual opRef (BinOp op x y)
     | opRef == op = (areOpsEqual opRef x) && (areOpsEqual opRef y)
     | otherwise = False
 
-applyBinOp _ (vx@(Var x):[])
-    | isTermNull x = c 0
-    | otherwise = vx
-applyBinOp op (vx@(Var x):xs)
-    | isTermNull x = expr
-    | otherwise = BinOp op expr vx
-    where expr = applyBinOp op xs
+applyBinOp _ (x:[]) = (Var x)
+applyBinOp op (x:xs) = BinOp op (applyBinOp op xs) (Var x)
 
-sumConsts :: Expr -> Double
-sumConsts (Const x) = x
-sumConsts (BinOp _ x y) = sumConsts y + sumConsts x
-sumConsts _ = 0.0
+extractConsts :: Expr -> [Double]
+extractConsts (Const x) = [x]
+extractConsts (BinOp _ x y) = extractConsts y ++ extractConsts x
+extractConsts _ = []
 
 extractVars all@(Var _) = all:[]
 extractVars (BinOp _ x y) = extractVars y ++ extractVars x
@@ -130,13 +125,20 @@ goesLeftOf _ _ = False
 
 solveNormalizeSquash all@(BinOp op x y)
     | (op == Add || op == Mult) && exprDepth all > 1 && areOpsEqual op all =
-        let consts = sumConsts all
+        let consts = extractConsts all
+            constsVal = case op of
+                Add -> sum consts
+                Mult -> map * consts
             mergeFunc = case op of
                 Add -> addTerm
                 Mult -> multTerm
             vars = mergeVars mergeFunc (extractVars all)
-            appliedVars = applyBinOp op vars
-        in  if consts /= 0.0 then (BinOp op appliedVars (c consts)) else appliedVars
+            terms = [t | (Var t) <- vars]
+            filteredTerms = case op of
+                Add -> filter (\x -> not (isTermZero x)) terms
+                Mult -> if not (null (filter isTermZero terms)) then [] else terms
+            appliedVars = applyBinOp op terms
+        in  if (sum consts) /= 0.0 then (BinOp op appliedVars (c (sum consts))) else appliedVars
     | otherwise = all
 
 solveNormalizeSquash x = x
@@ -192,6 +194,7 @@ testPairs = [
     (add (add (vs "x") (vs "y")) (vs "x"), "2x + y"),
     (add (vs "x") (mult (vs "x") (vs "y")), "(x * y) + x"),
     (mult (vs "x") (vs "x"), "x^2"),
+    (mult (vs "x") (c 0), "0.0"),
     (add (vs "x") (div_ (vs "x") (vs "y")), "(x / y) + x"),
     (equal (vs "x") (vi 2 "y"), "x + -2y = 0.0")]
 
