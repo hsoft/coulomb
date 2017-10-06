@@ -5,18 +5,19 @@ data Term = Term Double Int String deriving (Eq)
 instance Show Term where
     show (Term mult exp id) =
         let isint = isInt mult 3
-            isone = isint && (round mult) == 1
-            prefix = case (isint, isone) of
-                (True, True) -> ""
-                (True, False) -> printf "%0.0f" mult
-                (False, False) -> printf "%0.2e" mult
+            prefix = case (isint, round mult) of
+                (True, 1) -> ""
+                (True, (-1)) -> "-"
+                (True, _) -> printf "%0.0f" mult
+                (False, _) -> printf "%0.2e" mult
             suffix = if exp /= 1 then "^" ++ (show exp) else ""
         in prefix ++ id ++ suffix
 
-data BinaryOperator = Add | Mult | Div | Equal deriving (Eq)
+data BinaryOperator = Add | Subtract | Mult | Div | Equal deriving (Eq)
 
 instance Show BinaryOperator where
     show Add = "+"
+    show Subtract = "+"
     show Mult = "*"
     show Div = "/"
     show Equal = "="
@@ -51,6 +52,7 @@ var t = if isTermZero t then c 0 else (Var t)
 vs x = vi 1 x
 vi mx x = (var (Term mx 1 x))
 add x y = (BinOp Add x y)
+sub x y = (BinOp Subtract x y)
 mult x y = (BinOp Mult x y)
 div_ x y = (BinOp Div x y)
 equal x y = (BinOp Equal x y)
@@ -61,7 +63,17 @@ isInt :: (Integral a, RealFrac b) => b -> a -> Bool
 isInt x n = (round $ 10^(fromIntegral n)*(x-(fromIntegral $ round x)))==0
 
 negateTerm (Term mx exp x) = (Term (-mx) exp x)
+
+negateExpr (Const val) = (c (val * (-1)))
+negateExpr (Var term) = (var (negateTerm term))
+negateExpr (BinOp op x y) = (BinOp op (negateExpr x) (negateExpr y))
+
 invertTerm (Term mx exp x) = (Term mx (-exp) x)
+
+invertExpr (Const val) = (c (val ** (-1)))
+invertExpr (Var term) = (var (invertTerm term))
+invertExpr (BinOp op x y) = (BinOp op (invertExpr x) (invertExpr y))
+
 
 isTermZero (Term m _ _) = m <= 0.001 && m >= -0.001
 
@@ -81,8 +93,11 @@ areOpsEqual opRef (BinOp op x y)
     | opRef == op = (areOpsEqual opRef x) && (areOpsEqual opRef y)
     | otherwise = False
 
+applyBinOp_ op (x:[]) current = BinOp op current (Var x)
+applyBinOp_ op (x:xs) current = BinOp op (applyBinOp_ op xs current) (Var x)
+
 applyBinOp _ (x:[]) = (Var x)
-applyBinOp op (x:xs) = BinOp op (applyBinOp op xs) (Var x)
+applyBinOp op (x:xs) = applyBinOp_ op xs (Var x)
 
 extractConsts :: Expr -> [Double]
 extractConsts (Const x) = [x]
@@ -90,7 +105,7 @@ extractConsts (BinOp _ x y) = extractConsts y ++ extractConsts x
 extractConsts _ = []
 
 extractVars all@(Var _) = all:[]
-extractVars (BinOp _ x y) = extractVars y ++ extractVars x
+extractVars (BinOp _ x y) = extractVars x ++ extractVars y
 extractVars _ = []
 
 mergeVars :: (Term -> Term -> Maybe Term) -> [Expr] -> [Expr]
@@ -102,21 +117,15 @@ mergeVars mergeFunc all@(vx@(Var x):vy@(Var y):[]) = case mergeFunc x y of
 mergeVars mergeFunc (vx@(Var x):vy@(Var y):xs) = case mergeFunc x y of
     Just merged -> mergeVars mergeFunc ((Var merged):xs)
     Nothing ->
-        let (newY:newXS1) = mergeVars mergeFunc (vy:xs)
-            (newX:newXS2) = mergeVars mergeFunc (vx:newXS1)
+        let (newX:newXS1) = mergeVars mergeFunc (vx:xs)
+            (newY:newXS2) = mergeVars mergeFunc (vy:newXS1)
         in  (newX:newY:newXS2)
-
-invertExpr (Const val) = (c (val ** (-1)))
-invertExpr (Var term) = (var (invertTerm term))
-invertExpr (BinOp op x y) = (BinOp op (invertExpr x) (invertExpr y))
 
 -- Normalize
 goesLeftOf (Var _) (Const _) = True
 goesLeftOf (BinOp _ _ _) (Const _) = True
 goesLeftOf (BinOp _ _ _) (Var _) = True
 goesLeftOf (BinOp Mult _ _) (BinOp Add _ _) = True
-goesLeftOf (BinOp Div _ _) (BinOp Add _ _) = True
-goesLeftOf (Var (Term _ _ x)) (Var (Term _ _ y)) = y > x
 goesLeftOf _ _ = False
 
 solveNormalizeSquash all@(BinOp Add x y)
@@ -147,6 +156,9 @@ solveNormalizeSquash all@(BinOp Mult x y)
             (False, True) -> appliedVars
             (False, False) -> (BinOp Mult appliedVars (c (sum consts)))
     | otherwise = all
+
+-- We normalize subtraction by transforming it into an addition of negative terms
+solveNormalizeSquash all@(BinOp Subtract left right) = solveNormalize (BinOp Add left (negateExpr right))
 
 -- We normalize division by transforming it into a multiplication of negative exponents
 solveNormalizeSquash all@(BinOp Div left right) = solveNormalize (BinOp Mult left (invertExpr right))
@@ -210,6 +222,7 @@ testPairs = [
     (mult (vs "x") (c 0), "0.0"),
     (div_ (mult (vs "x") (vs "x")) (vs "x"), "x"),
     (add (vs "x") (div_ (vs "x") (vs "y")), "(x / y) + x"),
+    (sub (vs "x") (vs "y"), "x + -y"),
     (equal (vs "x") (vi 2 "y"), "x + -2y = 0.0")]
 
 testAll = [assertEq (show (solve expr)) expected | (expr, expected) <- testPairs]
