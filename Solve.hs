@@ -140,7 +140,7 @@ solveNormalizeSquash all@(BinOp Add x y)
         in  case constsValIsNeutral of
             True -> appliedVars
             False -> (add appliedVars (c (sum consts)))
-    | otherwise = all
+    | otherwise = (BinOp Add (solveNormalizeSquash x) (solveNormalizeSquash y))
 
 solveNormalizeSquash all@(BinOp Mult x y)
     | areOpsEqual Mult all =
@@ -155,7 +155,7 @@ solveNormalizeSquash all@(BinOp Mult x y)
             (True, _) -> c 0
             (False, True) -> appliedVars
             (False, False) -> (BinOp Mult appliedVars (c (sum consts)))
-    | otherwise = all
+    | otherwise = (BinOp Mult (solveNormalizeSquash x) (solveNormalizeSquash y))
 
 -- We normalize subtraction by transforming it into an addition of negative terms
 solveNormalizeSquash all@(BinOp Subtract left right) = solveNormalize (BinOp Add left (negateExpr right))
@@ -203,11 +203,26 @@ solveReduce (BinOp Equal x y) = solveReduceEqual (solveReduce x) (solveReduce y)
 solveReduce (BinOp op x y) = BinOp op (solveReduce x) (solveReduce y)
 solveReduce x = x
 
+multToDiv all@(BinOp Mult x y)
+    | areOpsEqual Mult all =
+        let vars = extractVars all
+            terms = [t | (Var t) <- vars]
+            dividend = [t | t@(Term _ exp _) <- terms, exp >= 0] 
+            divisors = [(Term mult (-exp) id) | t@(Term mult exp id) <- terms, exp < 0] 
+            result =
+                if null divisors then all
+                else (BinOp Div (applyBinOp Mult dividend) (applyBinOp Mult divisors))
+        in  result
+    | otherwise = all
+
+multToDiv (BinOp op x y) = (BinOp op (multToDiv x) (multToDiv y))
+multToDiv x = x
+
 -- Solve
 -- On commence par normaliser (mettre les termes et expression dans un ordre défini),
 -- puis on réduit (fusionner des termes qui vont ensemble)
 
-solve x = solveReduce (solveNormalize x)
+solve = multToDiv . solveReduce . solveNormalize
 
 -- tests
 
