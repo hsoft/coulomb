@@ -1,3 +1,4 @@
+import Data.List
 import Text.Printf
 
 data Term = Term Double Int String deriving (Eq)
@@ -62,6 +63,8 @@ equal x y = (BinOp Equal x y)
 isInt :: (Integral a, RealFrac b) => b -> a -> Bool
 isInt x n = (round $ 10^(fromIntegral n)*(x-(fromIntegral $ round x)))==0
 
+termName (Term _ _ termid) = termid
+
 negateTerm (Term mx exp x) = (Term (-mx) exp x)
 
 negateExpr (Const val) = (c (val * (-1)))
@@ -76,6 +79,7 @@ invertExpr (BinOp op x y) = (BinOp op (invertExpr x) (invertExpr y))
 
 
 isTermZero (Term m _ _) = m <= 0.001 && m >= -0.001
+isTermOne (Term _ exp _) = exp == 0
 
 addTerm (Term mx expx x) (Term my expy y)
     | x == y && expx == expy = (Just (Term (mx + my) expy y))
@@ -96,6 +100,7 @@ areOpsEqual opRef (BinOp op x y)
 applyBinOp_ op (x:[]) current = BinOp op current (Var x)
 applyBinOp_ op (x:xs) current = BinOp op (applyBinOp_ op xs current) (Var x)
 
+applyBinOp _ ([]) = (c 0)
 applyBinOp _ (x:[]) = (Var x)
 applyBinOp op (x:xs) = applyBinOp_ op xs (Var x)
 
@@ -139,7 +144,7 @@ normalizeSquash all@(BinOp Add x y)
             vars = mergeVars addTerm (extractVars all)
             terms = [t | (Var t) <- vars]
             filteredTerms = filter (\x -> not (isTermZero x)) terms
-            appliedVars = applyBinOp Add terms
+            appliedVars = applyBinOp Add filteredTerms
         in  case constsValIsNeutral of
             True -> appliedVars
             False -> (add appliedVars (c (sum consts)))
@@ -152,8 +157,9 @@ normalizeSquash all@(BinOp Mult x y)
             constsValIsNeutral = constsVal == 1
             vars = mergeVars multTerm (extractVars all)
             terms = [t | (Var t) <- vars]
+            filteredTerms = filter (\x -> not (isTermOne x)) terms
             exprNullified = constsVal == 0 || (not (null (filter isTermZero terms)))
-            appliedVars = applyBinOp Mult terms
+            appliedVars = applyBinOp Mult filteredTerms
         in  case (exprNullified, constsValIsNeutral) of
             (True, _) -> c 0
             (False, True) -> appliedVars
@@ -177,30 +183,79 @@ normalizeSendLeft all@(BinOp op x y)
 
 normalizeSendLeft x = x
 
+-- purgeOfVar expr into varname: for each occurrence of "varname" in expr, add a negating binop
+--                                 in both "expr" and "into" and returns (newexpr, newinto)
+--                                 we expect expr to be normalized
+purgeAddOfVar expr@(Var t) into varname
+    | (termName t) == varname =
+        let toadd = (var (negateTerm t))
+            newexpr = (c 0)
+            newinto = add into toadd
+        in  (newexpr, newinto)
+    | otherwise = (expr, into)
+
+purgeAddOfVar expr into varname = purgeOfVar expr into varname
+
+purgeMultOfVar expr@(Var t) into varname
+    | (termName t) == varname =
+        let tomult = (var (invertTerm t))
+            newexpr = (c 1)
+            newinto = mult into tomult
+        in  (newexpr, newinto)
+    | otherwise = (expr, into)
+
+purgeMultOfVar expr into varname = purgeOfVar expr into varname
+
+purgeOfVar expr@(BinOp Add left right) into varname =
+    let (exprLeft, intoLeft) = purgeAddOfVar left into varname
+        (exprRight, intoRight) = purgeAddOfVar right intoLeft varname
+    in ((add exprLeft exprRight), intoRight)
+
+purgeOfVar expr@(BinOp Mult left right) into varname =
+    let (exprLeft, intoLeft) = purgeMultOfVar left into varname
+        (exprRight, intoRight) = purgeMultOfVar right intoLeft varname
+    in ((mult exprLeft exprRight), intoRight)
+
+purgeOfVar expr@(Var t) into varname = 
+    let (Term _ exp _) = t
+    in  if exp > 0 then purgeAddOfVar expr into varname
+        else purgeMultOfVar expr into varname
+
+purgeOfVar expr into varname = (expr, into)
+    
 -- sendVarsLeftOfEqual: We send all variables to the left and all consts to the right
 
-sendVarsLeftOfEqual left right@(Var x) =
-    let toadd = (var (negateTerm x))
-        newleft = solve (add left toadd)
-        newright = solve (add right toadd)
-    in  equal newleft newright
-
-sendVarsLeftOfEqual left@(Const lx) right@(Const rx)
-    | lx == rx = equal left right
+sendVarsLeftOfEqual all@(BinOp Equal (Const lx) (Const rx))
+    | lx == rx = all
     | otherwise = error "impossible equality!"
 
-sendVarsLeftOfEqual left right = equal left right
+-- About vars sorting: we want to process variables with negative exponent first because we prefer
+--                     ending up with a "= 0" equality than a "= 1" one. For example, "x = y / x"
+--                     can end up either as "x^2 - y = 0" or as "x^2 / y = 1". We prefer the
+--                     former.
+
+sendVarsLeftOfEqual all@(BinOp Equal left right) = 
+    let cmp (Var (Term _ exp1 _)) (Var (Term _ exp2 _)) = compare exp1 exp2
+        vars = sortBy cmp (extractVars right)
+        acc = (\(r, l) (Var t) -> purgeOfVar (normalize r) l (termName t))
+        (newright, newleft) = foldl acc (right, left) vars
+    in  equal (normalize newleft) (normalize newright)
+
+sendVarsLeftOfEqual x = x
 
 -- Equal is normalized differently
 normalize all@(BinOp Equal x y) = 
     let left = normalize x
         right = normalize y
-    in sendVarsLeftOfEqual left right
+    in sendVarsLeftOfEqual (equal left right)
 
 normalize x
     | x == normalized = x
     | otherwise = normalize normalized
     where normalized = normalizeSendLeft (normalizeSquash x)
+
+
+-- Prettify
 
 multToDiv all@(BinOp Mult x y)
     | areOpsEqual Mult all =
@@ -217,7 +272,7 @@ multToDiv all@(BinOp Mult x y)
 multToDiv (BinOp op x y) = (BinOp op (multToDiv x) (multToDiv y))
 multToDiv x = x
 
-solve = multToDiv . normalize
+prettify = multToDiv
 
 -- tests
 
@@ -233,6 +288,7 @@ testPairs = [
     (div_ (mult (vs "x") (vs "x")) (vs "x"), "x"),
     (add (vs "x") (div_ (vs "x") (vs "y")), "(x / y) + x"),
     (sub (vs "x") (vs "y"), "x + -y"),
-    (equal (vs "x") (vi 2 "y"), "x + -2y = 0.0")]
+    (equal (vs "x") (vi 2 "y"), "x + -2y = 0.0"),
+    (equal (vs "x") (div_ (vi 2 "y") (vs "x")), "x^2 + -2y = 0.0")]
 
-testAll = [assertEq (show (solve expr)) expected | (expr, expected) <- testPairs]
+testAll = [assertEq (show ((prettify . normalize) expr)) expected | (expr, expected) <- testPairs]
