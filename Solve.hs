@@ -121,6 +121,9 @@ mergeVars mergeFunc (vx@(Var x):vy@(Var y):xs) = case mergeFunc x y of
             (newY:newXS2) = mergeVars mergeFunc (vy:newXS1)
         in  (newX:newY:newXS2)
 
+mapToBinOp f (BinOp op x y) = BinOp op (f x) (f y)
+mapToBinOp f expr = f expr
+
 -- Normalize
 goesLeftOf (Var _) (Const _) = True
 goesLeftOf (BinOp _ _ _) (Const _) = True
@@ -128,7 +131,7 @@ goesLeftOf (BinOp _ _ _) (Var _) = True
 goesLeftOf (BinOp Mult _ _) (BinOp Add _ _) = True
 goesLeftOf _ _ = False
 
-solveNormalizeSquash all@(BinOp Add x y)
+normalizeSquash all@(BinOp Add x y)
     | areOpsEqual Add all =
         let consts = extractConsts all
             constsVal = sum consts
@@ -140,9 +143,9 @@ solveNormalizeSquash all@(BinOp Add x y)
         in  case constsValIsNeutral of
             True -> appliedVars
             False -> (add appliedVars (c (sum consts)))
-    | otherwise = (BinOp Add (solveNormalizeSquash x) (solveNormalizeSquash y))
+    | otherwise = mapToBinOp normalizeSquash all
 
-solveNormalizeSquash all@(BinOp Mult x y)
+normalizeSquash all@(BinOp Mult x y)
     | areOpsEqual Mult all =
         let consts = extractConsts all
             constsVal = foldl (*) 1 consts
@@ -155,53 +158,49 @@ solveNormalizeSquash all@(BinOp Mult x y)
             (True, _) -> c 0
             (False, True) -> appliedVars
             (False, False) -> (BinOp Mult appliedVars (c (sum consts)))
-    | otherwise = (BinOp Mult (solveNormalizeSquash x) (solveNormalizeSquash y))
+    | otherwise = mapToBinOp normalizeSquash all
 
 -- We normalize subtraction by transforming it into an addition of negative terms
-solveNormalizeSquash all@(BinOp Subtract left right) = solveNormalize (BinOp Add left (negateExpr right))
+normalizeSquash all@(BinOp Subtract left right) = normalize (BinOp Add left (negateExpr right))
 
 -- We normalize division by transforming it into a multiplication of negative exponents
-solveNormalizeSquash all@(BinOp Div left right) = solveNormalize (BinOp Mult left (invertExpr right))
+normalizeSquash all@(BinOp Div left right) = normalize (BinOp Mult left (invertExpr right))
 
 -- We want to squash single 0-mult terms with minimal code duplication
-solveNormalizeSquash all@(Var _) = solveNormalizeSquash (mult all (c 1))
+normalizeSquash all@(Var _) = normalizeSquash (mult all (c 1))
 
-solveNormalizeSquash x = x
+normalizeSquash x = x
 
-solveNormalizeSendLeft (BinOp op x y)
-    | goesLeftOf y x = solveNormalizeSendLeft (BinOp op y x)
-    | otherwise = (BinOp op (solveNormalizeSendLeft x) (solveNormalizeSendLeft y))
+normalizeSendLeft all@(BinOp op x y)
+    | goesLeftOf y x = normalizeSendLeft (BinOp op y x)
+    | otherwise = mapToBinOp normalizeSendLeft all
 
-solveNormalizeSendLeft x = x
+normalizeSendLeft x = x
 
--- We never normalize Equal
-solveNormalize (BinOp Equal x y) = (BinOp Equal (solveNormalize x) (solveNormalize y))
+-- sendVarsLeftOfEqual: We send all variables to the left and all consts to the right
 
-solveNormalize x
-    | x == normalized = x
-    | otherwise = solveNormalize normalized
-    where normalized = solveNormalizeSendLeft (solveNormalizeSquash x)
-
--- solveReduceEqual: We send all variables to the left and all consts to the right
-
-solveReduceEqualSendLeft left right (Var x) =
+sendVarsLeftOfEqual left right@(Var x) =
     let toadd = (var (negateTerm x))
         newleft = solve (add left toadd)
         newright = solve (add right toadd)
     in  equal newleft newright
 
-solveReduceEqualSendLeft left right _ = equal left right
-
-solveReduceEqual left right = solveReduceEqualSendLeft left right right
-
-
-solveReduce (BinOp Equal left@(Const lx) right@(Const rx))
+sendVarsLeftOfEqual left@(Const lx) right@(Const rx)
     | lx == rx = equal left right
     | otherwise = error "impossible equality!"
 
-solveReduce (BinOp Equal x y) = solveReduceEqual (solveReduce x) (solveReduce y)
-solveReduce (BinOp op x y) = BinOp op (solveReduce x) (solveReduce y)
-solveReduce x = x
+sendVarsLeftOfEqual left right = equal left right
+
+-- Equal is normalized differently
+normalize all@(BinOp Equal x y) = 
+    let left = normalize x
+        right = normalize y
+    in sendVarsLeftOfEqual left right
+
+normalize x
+    | x == normalized = x
+    | otherwise = normalize normalized
+    where normalized = normalizeSendLeft (normalizeSquash x)
 
 multToDiv all@(BinOp Mult x y)
     | areOpsEqual Mult all =
@@ -218,11 +217,7 @@ multToDiv all@(BinOp Mult x y)
 multToDiv (BinOp op x y) = (BinOp op (multToDiv x) (multToDiv y))
 multToDiv x = x
 
--- Solve
--- On commence par normaliser (mettre les termes et expression dans un ordre défini),
--- puis on réduit (fusionner des termes qui vont ensemble)
-
-solve = multToDiv . solveReduce . solveNormalize
+solve = multToDiv . normalize
 
 -- tests
 
