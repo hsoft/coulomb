@@ -1,21 +1,6 @@
 import Data.List
 import Text.Printf
 
-data Term = Term Double Int String deriving (Eq)
-
-instance Show Term where
-    show (Term mult exp id) =
-        let isint = isInt mult 3
-            higherThanMilli = mult > (1 / 1000)
-            prefix = case (isint, higherThanMilli, round mult) of
-                (True, _, 1) -> ""
-                (True, _, (-1)) -> "-"
-                (True, _, _) -> printf "%0.0f" mult
-                (False, True, _) -> printf "%1.2f" mult
-                (False, False, _) -> printf "%0.2e" mult
-            suffix = if exp /= 1 then "^" ++ (show exp) else ""
-        in prefix ++ id ++ suffix
-
 data BinaryOperator = Add | Subtract | Mult | Div | Equal deriving (Eq)
 
 instance Show BinaryOperator where
@@ -27,13 +12,23 @@ instance Show BinaryOperator where
 
 data Expr =
     BinOp BinaryOperator Expr Expr |
-    Var Term
+    Var Double Int String
     deriving (Eq)
 
 showBinOp fmt (BinOp op x y) = printf fmt (show x) (show op) (show y)
 
 instance Show Expr where
-    show (Var x) = show x
+    show (Var mult exp id) =
+        let isint = isInt mult 3
+            higherThanMilli = mult > (1 / 1000)
+            prefix = case (isint, higherThanMilli, round mult) of
+                (True, _, 1) -> ""
+                (True, _, (-1)) -> "-"
+                (True, _, _) -> printf "%0.0f" mult
+                (False, True, _) -> printf "%1.2f" mult
+                (False, False, _) -> printf "%0.2e" mult
+            suffix = if exp /= 1 then "^" ++ (show exp) else ""
+        in prefix ++ id ++ suffix
 
     show all@(BinOp Equal _ _) = showBinOp "%s %s %s" all
     show all@(BinOp op (BinOp op1 _ _) (BinOp op2 _ _))
@@ -49,10 +44,9 @@ instance Show Expr where
         | otherwise = showBinOp "(%s) %s %s" all
     show all@(BinOp op _ _) = showBinOp "%s %s %s" all
 
-c x = (Var (Term x 1 ""))
-var t = if isTermZero t then c 0 else (Var t)
+c x = (Var x 1 "")
 vs x = vi 1 x
-vi mx x = (var (Term mx 1 x))
+vi mx x = (Var mx 1 x)
 add x y = (BinOp Add x y)
 sub x y = (BinOp Subtract x y)
 mult x y = (BinOp Mult x y)
@@ -64,20 +58,20 @@ equal x y = (BinOp Equal x y)
 isInt :: (Integral a, RealFrac b) => b -> a -> Bool
 isInt x n = (round $ 10^(fromIntegral n)*(x-(fromIntegral $ round x)))==0
 
-termName (Term _ _ termid) = termid
+termName (Var _ _ termid) = termid
 
-negateTerm (Term mx exp x) = (Term (-mx) exp x)
+negateTerm (Var mx exp x) = (Var (-mx) exp x)
 
-negateExpr (Var term) = (var (negateTerm term))
+negateExpr v@(Var _ _ _) = (negateTerm v)
 negateExpr (BinOp op x y) = (BinOp op (negateExpr x) (negateExpr y))
 
-invertTerm (Term mx exp x) = (Term mx (-exp) x)
+invertTerm (Var mx exp x) = (Var mx (-exp) x)
 
-invertExpr (Var term) = (var (invertTerm term))
+invertExpr v@(Var _ _ _) = (invertTerm v)
 invertExpr (BinOp op x y) = (BinOp op (invertExpr x) (invertExpr y))
 
 
-termConstVal (Term m exp tn)
+termConstVal (Var m exp tn)
     | m == 0 = Just 0
     | exp == 0 = Just 1
     | tn == "" = Just (m ** (fromIntegral exp))
@@ -86,45 +80,45 @@ termConstVal (Term m exp tn)
 isTermZero t = (termConstVal t) == Just 0
 isTermOne t = (termConstVal t) == Just 1
 
-addTerm t1@(Term mx expx x) t2@(Term my expy y) =
+addTerm t1@(Var mx expx x) t2@(Var my expy y) =
     case (termConstVal t1, termConstVal t2) of
-        (Just val, _) -> (Just (Term (my + val) expy y))
-        (_, Just val) -> (Just (Term (mx + val) expx x))
-        _ -> if x == y && expx == expy then (Just (Term (mx + my) expy y))
+        (Just val, _) -> (Just (Var (my + val) expy y))
+        (_, Just val) -> (Just (Var (mx + val) expx x))
+        _ -> if x == y && expx == expy then (Just (Var (mx + my) expy y))
             else Nothing
 
-multTerm t1@(Term mx expx x) t2@(Term my expy y) =
+multTerm t1@(Var mx expx x) t2@(Var my expy y) =
     case (termConstVal t1, termConstVal t2) of
-        (Just val, _) -> (Just (Term (my * val) expy y))
-        (_, Just val) -> (Just (Term (mx * val) expx x))
-        _ -> if x == y then (Just (Term (mx * my) (expx + expy) y))
+        (Just val, _) -> (Just (Var (my * val) expy y))
+        (_, Just val) -> (Just (Var (mx * val) expx x))
+        _ -> if x == y then (Just (Var (mx * my) (expx + expy) y))
             else Nothing
 
 -- areOpsEqual: Returns whether our children expressions are either Var or of the same
 -- op as `opRef`
-areOpsEqual _ (Var _) = True
+areOpsEqual _ (Var _ _ _) = True
 areOpsEqual opRef (BinOp op x y)
     | opRef == op = (areOpsEqual opRef x) && (areOpsEqual opRef y)
     | otherwise = False
 
-applyBinOp_ op (x:[]) current = BinOp op current (Var x)
-applyBinOp_ op (x:xs) current = BinOp op (applyBinOp_ op xs current) (Var x)
+applyBinOp_ op (x@(Var _ _ _):[]) current = BinOp op current x
+applyBinOp_ op (x@(Var _ _ _):xs) current = BinOp op (applyBinOp_ op xs current) x
 
 applyBinOp _ ([]) = (c 0)
-applyBinOp _ (x:[]) = (Var x)
-applyBinOp op (x:xs) = applyBinOp_ op xs (Var x)
+applyBinOp _ (x@(Var _ _ _):[]) = x
+applyBinOp op (x@(Var _ _ _):xs) = applyBinOp_ op xs x
 
-extractVars all@(Var _) = all:[]
+extractVars all@(Var _ _ _) = all:[]
 extractVars (BinOp _ x y) = extractVars x ++ extractVars y
 
-mergeVars :: (Term -> Term -> Maybe Term) -> [Expr] -> [Expr]
+mergeVars :: (Expr -> Expr -> Maybe Expr) -> [Expr] -> [Expr]
 mergeVars _ (x:[]) = [x]
-mergeVars mergeFunc all@(vx@(Var x):vy@(Var y):[]) = case mergeFunc x y of
-    Just merged -> [(Var merged)]
+mergeVars mergeFunc all@(vx@(Var _ _ _):vy@(Var _ _ _):[]) = case mergeFunc vx vy of
+    Just merged -> [merged]
     Nothing -> all
 
-mergeVars mergeFunc (vx@(Var x):vy@(Var y):xs) = case mergeFunc x y of
-    Just merged -> mergeVars mergeFunc ((Var merged):xs)
+mergeVars mergeFunc (vx@(Var _ _ _):vy@(Var _ _ _):xs) = case mergeFunc vx vy of
+    Just merged -> mergeVars mergeFunc (merged:xs)
     Nothing ->
         let (newX:newXS1) = mergeVars mergeFunc (vx:xs)
             (newY:newXS2) = mergeVars mergeFunc (vy:newXS1)
@@ -134,23 +128,21 @@ mapToBinOp f (BinOp op x y) = BinOp op (f x) (f y)
 mapToBinOp f expr = f expr
 
 -- Normalize
-goesLeftOf (BinOp _ _ _) (Var _) = True
+goesLeftOf (BinOp _ _ _) (Var _ _ _) = True
 goesLeftOf (BinOp Mult _ _) (BinOp Add _ _) = True
 goesLeftOf _ _ = False
 
 normalizeSquash all@(BinOp Add x y)
     | areOpsEqual Add all =
         let vars = mergeVars addTerm (extractVars all)
-            terms = [t | (Var t) <- vars]
-            appliedVars = applyBinOp Add terms
+            appliedVars = applyBinOp Add vars
         in  appliedVars
     | otherwise = mapToBinOp normalizeSquash all
 
 normalizeSquash all@(BinOp Mult x y)
     | areOpsEqual Mult all =
         let vars = mergeVars multTerm (extractVars all)
-            terms = [t | (Var t) <- vars]
-            appliedVars = applyBinOp Mult terms
+            appliedVars = applyBinOp Mult vars
         in appliedVars
     | otherwise = mapToBinOp normalizeSquash all
 
@@ -161,7 +153,7 @@ normalizeSquash all@(BinOp Subtract left right) = normalize (BinOp Add left (neg
 normalizeSquash all@(BinOp Div left right) = normalize (BinOp Mult left (invertExpr right))
 
 -- We want to squash single 0-mult terms with minimal code duplication
-normalizeSquash all@(Var _) = normalizeSquash (mult all (c 1))
+normalizeSquash all@(Var _ _ _) = normalizeSquash (mult all (c 1))
 
 normalizeSquash x = x
 
@@ -174,9 +166,9 @@ normalizeSendLeft x = x
 -- purgeOfVar expr into varname: for each occurrence of "varname" in expr, add a negating binop
 --                                 in both "expr" and "into" and returns (newexpr, newinto)
 --                                 we expect expr to be normalized
-purgeAddOfVar expr@(Var t) into varname
-    | (termName t) == varname =
-        let toadd = (var (negateTerm t))
+purgeAddOfVar expr@(Var _ _ _) into varname
+    | (termName expr) == varname =
+        let toadd = (negateTerm expr)
             newexpr = (c 0)
             newinto = add into toadd
         in  (newexpr, newinto)
@@ -184,9 +176,9 @@ purgeAddOfVar expr@(Var t) into varname
 
 purgeAddOfVar expr into varname = purgeOfVar expr into varname
 
-purgeMultOfVar expr@(Var t) into varname
-    | (termName t) == varname =
-        let tomult = (var (invertTerm t))
+purgeMultOfVar expr@(Var _ _ _) into varname
+    | (termName expr) == varname =
+        let tomult = (invertTerm expr)
             newexpr = (c 1)
             newinto = mult into tomult
         in  (newexpr, newinto)
@@ -204,10 +196,9 @@ purgeOfVar expr@(BinOp Mult left right) into varname =
         (exprRight, intoRight) = purgeMultOfVar right intoLeft varname
     in ((mult exprLeft exprRight), intoRight)
 
-purgeOfVar expr@(Var t) into varname = 
-    let (Term _ exp _) = t
-    in  if exp > 0 then purgeAddOfVar expr into varname
-        else purgeMultOfVar expr into varname
+purgeOfVar expr@(Var _ exp _) into varname = 
+    if exp > 0 then purgeAddOfVar expr into varname
+    else purgeMultOfVar expr into varname
 
 purgeOfVar expr into varname = (expr, into)
     
@@ -219,9 +210,9 @@ purgeOfVar expr into varname = (expr, into)
 --                     former.
 
 sendVarsLeftOfEqual all@(BinOp Equal left right) = 
-    let cmp (Var (Term _ exp1 _)) (Var (Term _ exp2 _)) = compare exp1 exp2
+    let cmp (Var _ exp1 _) (Var _ exp2 _) = compare exp1 exp2
         vars = sortBy cmp (extractVars right)
-        acc = (\(r, l) (Var t) -> purgeOfVar (normalize r) l (termName t))
+        acc = (\(r, l) v@(Var _ _ _) -> purgeOfVar (normalize r) l (termName v))
         (newright, newleft) = foldl acc (right, left) vars
     in  equal (normalize newleft) (normalize newright)
 
@@ -244,9 +235,8 @@ normalize x
 multToDiv all@(BinOp Mult x y)
     | areOpsEqual Mult all =
         let vars = extractVars all
-            terms = [t | (Var t) <- vars]
-            dividend = [t | t@(Term _ exp _) <- terms, exp >= 0] 
-            divisors = [(Term mult (-exp) id) | t@(Term mult exp id) <- terms, exp < 0] 
+            dividend = [v | v@(Var _ exp _) <- vars, exp >= 0] 
+            divisors = [(Var mult (-exp) id) | (Var mult exp id) <- vars, exp < 0] 
             result =
                 if null divisors then all
                 else (BinOp Div (applyBinOp Mult dividend) (applyBinOp Mult divisors))
@@ -255,15 +245,15 @@ multToDiv all@(BinOp Mult x y)
 
 multToDiv (BinOp op x y) = (BinOp op (multToDiv x) (multToDiv y))
 
-multToDiv all@(Var (Term m exp tn))
+multToDiv all@(Var m exp tn)
     | m >= 1 || m <= (-1) = all
-    | isInt (m ** (-1)) 3 = (div_ (Var (Term 1 exp tn)) (c (m ** (-1))))
+    | isInt (m ** (-1)) 3 = (div_ (Var 1 exp tn) (c (m ** (-1))))
     | otherwise = all
 
 prettify = multToDiv
 
 
-isolateDecompose left@(Var (Term m _ _)) right
+isolateDecompose left@(Var m _ _) right
     | m == 1 = (left, right)
     | otherwise =
         let inverter = (c (m ** (-1)))
