@@ -27,15 +27,13 @@ instance Show BinaryOperator where
 
 data Expr =
     BinOp BinaryOperator Expr Expr |
-    Var Term |
-    Const Double
+    Var Term
     deriving (Eq)
 
 showBinOp fmt (BinOp op x y) = printf fmt (show x) (show op) (show y)
 
 instance Show Expr where
     show (Var x) = show x
-    show (Const x) = if isInt x 3 then show (round x) else show x
 
     show all@(BinOp Equal _ _) = showBinOp "%s %s %s" all
     show all@(BinOp op (BinOp op1 _ _) (BinOp op2 _ _))
@@ -51,7 +49,7 @@ instance Show Expr where
         | otherwise = showBinOp "(%s) %s %s" all
     show all@(BinOp op _ _) = showBinOp "%s %s %s" all
 
-c x = (Const x)
+c x = (Var (Term x 1 ""))
 var t = if isTermZero t then c 0 else (Var t)
 vs x = vi 1 x
 vi mx x = (var (Term mx 1 x))
@@ -70,31 +68,40 @@ termName (Term _ _ termid) = termid
 
 negateTerm (Term mx exp x) = (Term (-mx) exp x)
 
-negateExpr (Const val) = (c (val * (-1)))
 negateExpr (Var term) = (var (negateTerm term))
 negateExpr (BinOp op x y) = (BinOp op (negateExpr x) (negateExpr y))
 
 invertTerm (Term mx exp x) = (Term mx (-exp) x)
 
-invertExpr (Const val) = (c (val ** (-1)))
 invertExpr (Var term) = (var (invertTerm term))
 invertExpr (BinOp op x y) = (BinOp op (invertExpr x) (invertExpr y))
 
 
-isTermZero (Term m _ _) = m <= 0.001 && m >= -0.001
-isTermOne (Term _ exp _) = exp == 0
-
-addTerm (Term mx expx x) (Term my expy y)
-    | x == y && expx == expy = (Just (Term (mx + my) expy y))
+termConstVal (Term m exp tn)
+    | m == 0 = Just 0
+    | exp == 0 = Just 1
+    | tn == "" = Just (m ** (fromIntegral exp))
     | otherwise = Nothing
 
-multTerm (Term mx expx x) (Term my expy y)
-    | x == y = (Just (Term (mx * my) (expx + expy) y))
-    | otherwise = Nothing
+isTermZero t = (termConstVal t) == Just 0
+isTermOne t = (termConstVal t) == Just 1
 
--- areOpsEqual: Returns whether our children expressions are either Const, Var or of the same
+addTerm t1@(Term mx expx x) t2@(Term my expy y) =
+    case (termConstVal t1, termConstVal t2) of
+        (Just val, _) -> (Just (Term (my + val) expy y))
+        (_, Just val) -> (Just (Term (mx + val) expx x))
+        _ -> if x == y && expx == expy then (Just (Term (mx + my) expy y))
+            else Nothing
+
+multTerm t1@(Term mx expx x) t2@(Term my expy y) =
+    case (termConstVal t1, termConstVal t2) of
+        (Just val, _) -> (Just (Term (my * val) expy y))
+        (_, Just val) -> (Just (Term (mx * val) expx x))
+        _ -> if x == y then (Just (Term (mx * my) (expx + expy) y))
+            else Nothing
+
+-- areOpsEqual: Returns whether our children expressions are either Var or of the same
 -- op as `opRef`
-areOpsEqual _ (Const _) = True
 areOpsEqual _ (Var _) = True
 areOpsEqual opRef (BinOp op x y)
     | opRef == op = (areOpsEqual opRef x) && (areOpsEqual opRef y)
@@ -107,14 +114,8 @@ applyBinOp _ ([]) = (c 0)
 applyBinOp _ (x:[]) = (Var x)
 applyBinOp op (x:xs) = applyBinOp_ op xs (Var x)
 
-extractConsts :: Expr -> [Double]
-extractConsts (Const x) = [x]
-extractConsts (BinOp _ x y) = extractConsts y ++ extractConsts x
-extractConsts _ = []
-
 extractVars all@(Var _) = all:[]
 extractVars (BinOp _ x y) = extractVars x ++ extractVars y
-extractVars _ = []
 
 mergeVars :: (Term -> Term -> Maybe Term) -> [Expr] -> [Expr]
 mergeVars _ (x:[]) = [x]
@@ -133,44 +134,24 @@ mapToBinOp f (BinOp op x y) = BinOp op (f x) (f y)
 mapToBinOp f expr = f expr
 
 -- Normalize
-goesLeftOf (Var _) (Const _) = True
-goesLeftOf (BinOp _ _ _) (Const _) = True
 goesLeftOf (BinOp _ _ _) (Var _) = True
 goesLeftOf (BinOp Mult _ _) (BinOp Add _ _) = True
 goesLeftOf _ _ = False
 
 normalizeSquash all@(BinOp Add x y)
     | areOpsEqual Add all =
-        let consts = extractConsts all
-            constsVal = sum consts
-            constsValIsNeutral = constsVal == 0
-            vars = mergeVars addTerm (extractVars all)
+        let vars = mergeVars addTerm (extractVars all)
             terms = [t | (Var t) <- vars]
-            filteredTerms = filter (\x -> not (isTermZero x)) terms
-            appliedVars = applyBinOp Add filteredTerms
-        in  case constsValIsNeutral of
-            True -> appliedVars
-            False -> (add appliedVars (c (sum consts)))
+            appliedVars = applyBinOp Add terms
+        in  appliedVars
     | otherwise = mapToBinOp normalizeSquash all
-
-normalizeSquash (BinOp Mult (Var (Term m exp tn)) (Const cval))
-    | cval == 0 = (c 0)
-    | otherwise = (Var (Term (m * cval) exp tn))
 
 normalizeSquash all@(BinOp Mult x y)
     | areOpsEqual Mult all =
-        let consts = extractConsts all
-            constsVal = foldl (*) 1 consts
-            constsValIsNeutral = constsVal == 1
-            vars = mergeVars multTerm (extractVars all)
+        let vars = mergeVars multTerm (extractVars all)
             terms = [t | (Var t) <- vars]
-            filteredTerms = filter (\x -> not (isTermOne x)) terms
-            exprNullified = constsVal == 0 || (not (null (filter isTermZero terms)))
-            appliedVars = applyBinOp Mult filteredTerms
-        in  case (exprNullified, constsValIsNeutral) of
-            (True, _) -> c 0
-            (False, True) -> appliedVars
-            (False, False) -> (BinOp Mult appliedVars (c (sum consts)))
+            appliedVars = applyBinOp Mult terms
+        in appliedVars
     | otherwise = mapToBinOp normalizeSquash all
 
 -- We normalize subtraction by transforming it into an addition of negative terms
@@ -232,10 +213,6 @@ purgeOfVar expr into varname = (expr, into)
     
 -- sendVarsLeftOfEqual: We send all variables to the left and all consts to the right
 
-sendVarsLeftOfEqual all@(BinOp Equal (Const lx) (Const rx))
-    | lx == rx = all
-    | otherwise = error "impossible equality!"
-
 -- About vars sorting: we want to process variables with negative exponent first because we prefer
 --                     ending up with a "= 0" equality than a "= 1" one. For example, "x = y / x"
 --                     can end up either as "x^2 - y = 0" or as "x^2 / y = 1". We prefer the
@@ -282,8 +259,6 @@ multToDiv all@(Var (Term m exp tn))
     | m >= 1 || m <= (-1) = all
     | isInt (m ** (-1)) 3 = (div_ (Var (Term 1 exp tn)) (c (m ** (-1))))
     | otherwise = all
-
-multToDiv x = x
 
 prettify = multToDiv
 
