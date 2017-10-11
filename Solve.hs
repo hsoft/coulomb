@@ -6,11 +6,13 @@ data Term = Term Double Int String deriving (Eq)
 instance Show Term where
     show (Term mult exp id) =
         let isint = isInt mult 3
-            prefix = case (isint, round mult) of
-                (True, 1) -> ""
-                (True, (-1)) -> "-"
-                (True, _) -> printf "%0.0f" mult
-                (False, _) -> printf "%0.2e" mult
+            higherThanMilli = mult > (1 / 1000)
+            prefix = case (isint, higherThanMilli, round mult) of
+                (True, _, 1) -> ""
+                (True, _, (-1)) -> "-"
+                (True, _, _) -> printf "%0.0f" mult
+                (False, True, _) -> printf "%1.2f" mult
+                (False, False, _) -> printf "%0.2e" mult
             suffix = if exp /= 1 then "^" ++ (show exp) else ""
         in prefix ++ id ++ suffix
 
@@ -33,7 +35,8 @@ showBinOp fmt (BinOp op x y) = printf fmt (show x) (show op) (show y)
 
 instance Show Expr where
     show (Var x) = show x
-    show (Const x) = show x
+    show (Const x) = if isInt x 3 then show (round x) else show x
+
     show all@(BinOp Equal _ _) = showBinOp "%s %s %s" all
     show all@(BinOp op (BinOp op1 _ _) (BinOp op2 _ _))
         | (op1 == op) && (op2 == op) = showBinOp "%s %s %s" all
@@ -149,6 +152,10 @@ normalizeSquash all@(BinOp Add x y)
             True -> appliedVars
             False -> (add appliedVars (c (sum consts)))
     | otherwise = mapToBinOp normalizeSquash all
+
+normalizeSquash (BinOp Mult (Var (Term m exp tn)) (Const cval))
+    | cval == 0 = (c 0)
+    | otherwise = (Var (Term (m * cval) exp tn))
 
 normalizeSquash all@(BinOp Mult x y)
     | areOpsEqual Mult all =
@@ -270,9 +277,29 @@ multToDiv all@(BinOp Mult x y)
     | otherwise = all
 
 multToDiv (BinOp op x y) = (BinOp op (multToDiv x) (multToDiv y))
+
+multToDiv all@(Var (Term m exp tn))
+    | m >= 1 || m <= (-1) = all
+    | isInt (m ** (-1)) 3 = (div_ (Var (Term 1 exp tn)) (c (m ** (-1))))
+    | otherwise = all
+
 multToDiv x = x
 
 prettify = multToDiv
+
+
+isolateDecompose left@(Var (Term m _ _)) right
+    | m == 1 = (left, right)
+    | otherwise =
+        let inverter = (c (m ** (-1)))
+            newleft = mult left inverter
+            newright = mult right inverter
+        in  (newleft, newright)
+
+isolate (BinOp Equal left right) varname =
+    let (newright1, newleft1) = purgeOfVar left right varname
+        (newleft2, newright2) = isolateDecompose (normalize newleft1) newright1
+    in  (equal (normalize newleft2) (normalize newright2))
 
 -- tests
 
@@ -280,15 +307,20 @@ assertEq a b
     | a == b = ()
     | otherwise = error (printf "%s != %s" a b)
 
-testPairs = [
+testPairsNormalize = [
     (add (add (vs "x") (vs "y")) (vs "x"), "2x + y"),
     (add (vs "x") (mult (vs "x") (vs "y")), "(x * y) + x"),
     (mult (vs "x") (vs "x"), "x^2"),
-    (mult (vs "x") (c 0), "0.0"),
+    (mult (vs "x") (c 0), "0"),
     (div_ (mult (vs "x") (vs "x")) (vs "x"), "x"),
     (add (vs "x") (div_ (vs "x") (vs "y")), "(x / y) + x"),
     (sub (vs "x") (vs "y"), "x + -y"),
-    (equal (vs "x") (vi 2 "y"), "x + -2y = 0.0"),
-    (equal (vs "x") (div_ (vi 2 "y") (vs "x")), "x^2 + -2y = 0.0")]
+    (equal (vs "x") (vi 2 "y"), "x + -2y = 0"),
+    (equal (vs "x") (div_ (vi 2 "y") (vs "x")), "x^2 + -2y = 0")]
 
-testAll = [assertEq (show ((prettify . normalize) expr)) expected | (expr, expected) <- testPairs]
+testNormalize = [assertEq (show ((prettify . normalize) expr)) expected | (expr, expected) <- testPairsNormalize]
+
+testTriplesIsolate = [
+    (equal (vs "x") (div_ (vi 2 "y") (vs "x")), "y", "y = x^2 / 2")]
+
+testIsolate = [assertEq (show (prettify (isolate (normalize expr) varname))) expected | (expr, varname, expected) <- testTriplesIsolate]
